@@ -1,2 +1,2 @@
 # FileExctractor
-C++ Code to Exctract Windows File and Receive in Linuz Machine
+C++ Code to Extract Windows File and Receive in Linux Machine
