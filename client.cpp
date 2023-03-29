@@ -6,11 +6,23 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <iostream>
-
+#include <signal.h>
+#include <sys/time.h>
 
 using namespace std;
 
 #define BUFFER_SIZE 1024
+#define MAX_IDLE_TIME 10 // 10 segundos de inactividad antes de reiniciar la conexión
+
+bool is_idle = false;
+
+void close_connection(int signal) {
+    is_idle = true;
+}
+
+void timer_handler(int signal) {
+    is_idle = true;
+}
 
 int main(int argc, char *argv[]) {
     int sockfd, newsockfd, portno;
@@ -48,28 +60,57 @@ int main(int argc, char *argv[]) {
     listen(sockfd, 5);
     clilen = sizeof(cli_addr);
 
-    // Aceptar una conexión entrante
-    newsockfd = accept(sockfd, (struct sockaddr *) &cli_addr, &clilen);
-    if (newsockfd < 0) {
-        perror("ERROR on accept");
-        exit(1);
-    }
+    // Configurar el temporizador
+    struct sigaction sa;
+    struct itimerval timer;
 
-    // Leer los datos del archivo
-    FILE *fp = fopen("leak.txt", "wb");
-    if (fp == NULL) {
-        perror("ERROR opening file");
-        exit(1);
-    }
-    bzero(buffer, BUFFER_SIZE);
-    while ((n = recv(newsockfd, buffer, BUFFER_SIZE, 0)) > 0) {
-        fwrite(buffer, 1, n, fp);
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = &timer_handler;
+    sigaction(SIGALRM, &sa, NULL);
+
+    timer.it_value.tv_sec = MAX_IDLE_TIME;
+    timer.it_value.tv_usec = 0;
+    timer.it_interval.tv_sec = 0;
+    timer.it_interval.tv_usec = 0;
+
+    while (true) {
+        // Configurar el temporizador
+        setitimer(ITIMER_REAL, &timer, NULL);
+
+        // Aceptar una conexión entrante
+        newsockfd = accept(sockfd, (struct sockaddr *) &cli_addr, &clilen);
+        if (newsockfd < 0) {
+            continue;
+        }
+
+        // Reiniciar el temporizador
+        timer.it_value.tv_sec = MAX_IDLE_TIME;
+        timer.it_value.tv_usec = 0;
+
+        // Leer los datos del archivo
+        FILE *fp = fopen("leak.txt", "wb");
+        if (fp == NULL) {
+            perror("ERROR opening file");
+            close(newsockfd);
+            continue;
+        }
         bzero(buffer, BUFFER_SIZE);
-    }
-    fclose(fp);
+        while ((n = recv(newsockfd, buffer, BUFFER_SIZE, 0)) > 0) {
+            fwrite(buffer,sizeof(char),n,fp);
+            memset(buffer, 0, BUFFER_SIZE);
+        }
+        fclose(fp);
+        cout << "\nFile received successfully\n";
+        close(newsockfd);
 
-    close(newsockfd);
+        if (is_idle) {
+            is_idle = false;
+        }
+        }
+
+    // Cerrar el socket
     close(sockfd);
-    return 0;
-}
 
+    return 0;
+
+}
